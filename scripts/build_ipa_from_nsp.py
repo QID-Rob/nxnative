@@ -410,15 +410,33 @@ def pfs0_names(path):   # NSP = PFS0: list the file names inside
     return [strs[o:strs.index(b'\0', o)].decode(errors='replace') for o in (struct.unpack_from('<I', ent, i * 0x18 + 0x10)[0] for i in range(n))]
 
 
-def title_of(path):   # the ticket name (the first 16 digits of the rights ID = title ID), else [title ID] in the file name
-    for n in pfs0_names(path):   # the ticket first: a file name's tag can be wrong (FFT's base NSP is tagged …0001, its ticket is …0000)
+def pfs0_read(path, name, limit=1 << 20):   # the bytes of one file inside an NSP (PFS0), up to limit; None without it
+    with open(path, 'rb') as f:
+        h = f.read(16)
+        if h[:4] != b'PFS0': return None
+        n, st = struct.unpack_from('<II', h, 4)
+        ent, strs = f.read(n * 0x18), f.read(st)
+        for i in range(n):
+            off, size, so = struct.unpack_from('<QQI', ent, i * 0x18)
+            if strs[so:strs.index(b'\0', so)].decode(errors='replace') == name:
+                f.seek(16 + n * 0x18 + st + off); return f.read(min(size, limit))
+    return None
+
+
+def title_of(path):   # the ticket name (the first 16 digits of the rights ID = title ID), else the content meta XML's <Id>, else [title ID] in the file name
+    names = pfs0_names(path)
+    for n in names:   # the ticket first: a file name's tag can be wrong (FFT's base NSP is tagged …0001, its ticket is …0000)
         if re.match(r'[0-9A-Fa-f]{32}\.tik$', n): return int(n[:16], 16)
+    for n in names:   # an NSP with standard crypto has no ticket (New Super Mario Bros. U Deluxe, converted from a cartridge); its <hash>.cnmt.xml names the title
+        if n.endswith('.cnmt.xml'):
+            m = re.search(rb'<Id>0x([0-9A-Fa-f]{16})</Id>', pfs0_read(path, n) or b'')
+            if m: return int(m.group(1), 16)
     m = re.search(r'\[([0-9A-Fa-f]{16})\]', path.name)
     return int(m.group(1), 16) if m else None
 
 
-def version_of(path):
-    m = re.search(r'\[v(\d+)\]', path.name)
+def version_of(path):   # the [v<N>] tag, else a bare v<N> word of 5+ digits (versions are multiples of 65536) as in "….v720896.UPD.nsp"; a short v2 or a v1.4.3 is not a version number
+    m = re.search(r'\[v(\d+)\]', path.name) or re.search(r'(?<![0-9A-Za-z])v(\d{5,})(?![0-9A-Za-z])', path.name)
     return int(m.group(1)) if m else None
 
 
